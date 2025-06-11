@@ -1,0 +1,5 @@
+fastapi
+websockets==10.4
+python-multipart
+python-testui
+python-dotenv
