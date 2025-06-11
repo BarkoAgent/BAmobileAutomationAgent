@@ -131,6 +131,7 @@ def log_function_definition(fn, *args, **kwargs):
 ###############################################################################
 def create_driver(_run_test_id='1'):
     """
+    Usage = create_driver({})
     Creates a driver that is necessary for the automation to run in the first place.
     Doesn't need any input values to the function and it returns success as string
 
@@ -155,10 +156,12 @@ def create_driver(_run_test_id='1'):
 
     elif os.getenv("UDID_IOS"):
         bundle_id = os.getenv("BUNDLE_ID")
+        print(bundle_id)
         udid = os.getenv("UDID_IOS")
         driver[_run_test_id] = (
             NewDriver()
             .set_logger()
+            .set_platform('ios')
             .set_bundle_id(bundle_id=bundle_id)
             .set_udid(udid=udid)
             .set_appium_driver()
@@ -169,6 +172,7 @@ def create_driver(_run_test_id='1'):
 
 def stop_driver(_run_test_id='1'):
     """
+    Usage = stop_driver({})
     Stops the driver so that later another one can take place,
     and it's always run at the end of the test case.
     Doesn't need any input values to the function and it returns success as string
@@ -181,52 +185,54 @@ def stop_driver(_run_test_id='1'):
 
 def send_keys(locator_type: str, locator: str, value: str, _run_test_id='1') -> str:
     """
+    Usage = send_keys({"locator_type": "...", "locator": "...", "value": "..."})
     Types in the value in the element defined by its `locator_type` (id, css, xpath)
     and its locator path associated.
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).send_keys(value=value)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).clear().send_keys(value=value)
     log_function_definition(send_keys, locator_type, locator, value, _run_test_id=_run_test_id)
     return "sent keys"
 
 
 def exists(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
+    Usage = exists({"locator_type": "...", "locator": "..."})
     checks if element defined by its `locator_type` (id, css, xpath)
     and its locator path associated exists in the web page
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_visible(seconds=20)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_visible(seconds=5)
     log_function_definition(exists, locator_type, locator, _run_test_id=_run_test_id)
     return "exists"
 
 def does_not_exist(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
+    Usage = does_not_exist({"locator_type": "...", "locator": "..."})
     checks if element defined by its `locator_type` (id, css, xpath)
     and its locator path associated does NOT exist in the web page
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_visible(seconds=20)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_visible(seconds=5)
     log_function_definition(does_not_exist, locator_type, locator, _run_test_id=_run_test_id)
     return "doesn't exists"
 
 def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
+    Usage = click({"locator_type": "...", "locator": "..."})
     Clicks/Taps in the element defined by its `locator_type` (id, css, xpath)
     and its locator path associated.
-
-    It will return the HTML after clicking
     """
     global driver
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
     log_function_definition(click, locator_type, locator, _run_test_id=_run_test_id)
-    content = driver[_run_test_id].get_driver().page_source
-    html_content = clean_html(content)
-    return html_content
+
+    return "clicked successfully"
 
 
 def get_page(_run_test_id='1') -> str:
     """
+    Usage = get_page({})
     Returns the full DOM of the page (cleaned) so that you can parse it for exists or
     click, send_keys, etc. on some element.
     """
