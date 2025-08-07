@@ -102,9 +102,6 @@ def log_function_definition(fn, *args, **kwargs):
             repl = f'{param}={repr(actual_val)}'
             new_line = re.sub(pattern, repl, new_line)
         
-        if "appium_url" in new_line and kwargs['appium_url'] is not None:
-            new_line = new_line.replace("appium_url", repr(kwargs['appium_url']))
-        # (A) Replace driver[_run_test_id] with driver
         pattern = r"driver\[_run_test_id\]"
         repl = f'driver'
         new_line = re.sub(pattern, repl, new_line)
@@ -151,6 +148,7 @@ def create_driver(_run_test_id='1'):
             .set_udid(udid=udid)
             .set_appium_driver()
         )
+        driver[_run_test_id].get_driver().activate_app(app_id=app_package)
         log_function_definition(create_driver, _run_test_id=_run_test_id)
         return "Android driver created"
 
@@ -169,6 +167,21 @@ def create_driver(_run_test_id='1'):
         log_function_definition(create_driver, _run_test_id=_run_test_id)
         return "iOS driver created"
 
+def stop_all_drivers(_run_test_id='1'):
+    """
+    Usage = stop_all_drivers({})
+    Stops all the drivers that are running in this agent.
+    Doesn't need any input values to the function and it returns  'All drivers stopped and entries cleared.'
+    """
+    global driver
+    for run_id, drv in list(driver.items()):
+        try:
+            drv.quit()
+            print(f"✅ Driver '{run_id}' stopped.")
+        except Exception as e:
+            print(f"⚠️ Error stopping driver '{run_id}': {e}")
+    driver.clear()
+    return "🗑️ All drivers stopped and entries cleared."
 
 def stop_driver(_run_test_id='1'):
     """

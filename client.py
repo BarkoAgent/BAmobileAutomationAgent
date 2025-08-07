@@ -22,6 +22,7 @@ FUNCTION_MAP = {
     "does_not_exist": agent_func.does_not_exist,
     "click": agent_func.click,
     "get_page": agent_func.get_page,
+    "stop_all_drivers": agent_func.stop_all_drivers,
 }
 
 # -------------------------------------------------------------------
