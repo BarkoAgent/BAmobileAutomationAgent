@@ -141,6 +141,7 @@ def create_driver(_run_test_id='1'):
         udid = os.getenv("UDID_ANDROID")
         app_package = os.getenv("APP_PACKAGE")
         app_activity = os.getenv("APP_ACTIVITY")
+        app_path = os.getenv("APP_PATH")
         driver[_run_test_id] = (
             NewDriver()
             .set_logger()
