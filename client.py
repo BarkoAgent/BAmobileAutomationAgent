@@ -20,7 +20,7 @@ if __name__ == "__main__":
         os.environ["BACKEND_WS_URI"] = backend_uri
 
     try:
-        t = threading.Thread(target=lambda: ws_stream_server.run_app(host="0.0.0.0", port=8081), daemon=True)
+        t = threading.Thread(target=lambda: ws_stream_server.run_app(host="0.0.0.0", port=8082), daemon=True)
         t.start()
         asyncio.run(main_connect_ws())
     except KeyboardInterrupt:

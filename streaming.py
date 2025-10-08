@@ -53,7 +53,6 @@ def _stream_worker(run_id: str, driver, fps: float, jpeg_quality: int, stop_even
                 jpeg_bytes = png_bytes
 
             with _LOCK:
-                logging.info(f"Captured frame for run_id={run_id}, size={len(jpeg_bytes)} bytes")
                 _LATEST_FRAMES[run_id] = (jpeg_bytes, time.time())
 
             stop_event.wait(interval)
@@ -114,6 +113,7 @@ def get_latest_frame(run_id: str) -> Optional[bytes]:
     """
     with _LOCK:
         item = _LATEST_FRAMES.get(run_id)
+        _LATEST_FRAMES.pop(run_id, None)
         if item is None:
             return None
         return item[0]

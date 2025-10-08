@@ -146,6 +146,7 @@ def create_driver(_run_test_id='1'):
         NewDriver()
         .set_logger()
         .set_udid(udid=udid)
+        .set_extra_caps({"appium:chromedriverArgs": {}})
     )
     if os.getenv("APP_PACKAGE"):
         app_package = os.getenv("APP_PACKAGE")
@@ -175,7 +176,7 @@ def create_driver(_run_test_id='1'):
             .set_bundle_id(bundle_id=bundle_id)
         )
     driver[_run_test_id] = driver[_run_test_id].set_appium_driver()
-    streaming.start_stream(driver[_run_test_id], run_id="1", fps=1.0, jpeg_quality=70)
+    streaming.start_stream(driver[_run_test_id], run_id="1", fps=5.0, jpeg_quality=70)
     log_function_definition(create_driver, _run_test_id=_run_test_id)
     return "success"
 
@@ -269,3 +270,24 @@ def get_page(_run_test_id='1') -> str:
     content = driver[_run_test_id].get_driver().page_source
     html_content = clean_html(content)
     return html_content
+
+
+def go_back(_run_test_id='1') -> str:
+    """
+    Usage = go_back({})
+    Goes back in the browser history.
+    """
+    global driver
+    driver[_run_test_id].back()
+    log_function_definition(go_back, _run_test_id=_run_test_id)
+    return "went back"
+
+def send_app_background(_run_test_id='1') -> str:
+    """
+    Usage = send_app_background({})
+    Sends the app to background.
+    """
+    global driver
+    driver[_run_test_id].background_app(-1)
+    log_function_definition(send_app_background, _run_test_id=_run_test_id)
+    return "app in background"
