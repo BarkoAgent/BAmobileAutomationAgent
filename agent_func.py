@@ -2,6 +2,7 @@ import inspect
 import re
 import textwrap
 import os
+import streaming
 from testui.support.testui_driver import TestUIDriver
 from dotenv import load_dotenv
 
@@ -139,34 +140,45 @@ def create_driver(_run_test_id='1'):
     import os
     if os.getenv("UDID_ANDROID"):
         udid = os.getenv("UDID_ANDROID")
+    elif os.getenv("UDID_IOS"):
+        udid = os.getenv("UDID_IOS")
+    driver[_run_test_id] = (
+        NewDriver()
+        .set_logger()
+        .set_udid(udid=udid)
+        .set_extra_caps({"appium:chromedriverArgs": {}})
+    )
+    if os.getenv("APP_PACKAGE"):
         app_package = os.getenv("APP_PACKAGE")
         app_activity = os.getenv("APP_ACTIVITY")
+        driver[_run_test_id] = (
+            driver[_run_test_id]
+            .set_app_package_activity(app_package=app_package, app_activity=app_activity)
+        )
+    if os.getenv("APPIUM_URL") != "":
+        appium_url = os.getenv("APPIUM_URL")
+        driver[_run_test_id] = (
+            driver[_run_test_id]
+            .set_appium_url(appium_url)
+        )
+    if os.getenv("APP_PATH") and os.getenv("APP_PACKAGE") == "":
         app_path = os.getenv("APP_PATH")
         driver[_run_test_id] = (
-            NewDriver()
-            .set_logger()
-            .set_app_package_activity(app_package=app_package, app_activity=app_activity)
-            .set_udid(udid=udid)
-            .set_appium_driver()
+            driver[_run_test_id]
+            .set_app_path(app_path)
+            .set_extra_caps({"appium:enforceAppInstall": True})
         )
-        driver[_run_test_id].get_driver().activate_app(app_id=app_package)
-        log_function_definition(create_driver, _run_test_id=_run_test_id)
-        return "Android driver created"
-
-    elif os.getenv("UDID_IOS"):
+    if os.getenv("BUNDLE_ID") and os.getenv("UDID_IOS"):
         bundle_id = os.getenv("BUNDLE_ID")
-        print(bundle_id)
-        udid = os.getenv("UDID_IOS")
         driver[_run_test_id] = (
-            NewDriver()
-            .set_logger()
+            driver[_run_test_id]
             .set_platform('ios')
             .set_bundle_id(bundle_id=bundle_id)
-            .set_udid(udid=udid)
-            .set_appium_driver()
         )
-        log_function_definition(create_driver, _run_test_id=_run_test_id)
-        return "iOS driver created"
+    driver[_run_test_id] = driver[_run_test_id].set_appium_driver()
+    streaming.start_stream(driver[_run_test_id], run_id="1", fps=1.0, jpeg_quality=10)
+    log_function_definition(create_driver, _run_test_id=_run_test_id)
+    return "success"
 
 def stop_all_drivers(_run_test_id='1'):
     """
@@ -192,6 +204,10 @@ def stop_driver(_run_test_id='1'):
     Doesn't need any input values to the function and it returns success as string
     """
     global driver
+    try:
+        streaming.stop_stream("1")
+    except Exception:
+        print("Failed to stop stream cleanly")
     driver[_run_test_id].quit()
     log_function_definition(stop_driver, _run_test_id=_run_test_id)
     return "success"
@@ -254,3 +270,24 @@ def get_page(_run_test_id='1') -> str:
     content = driver[_run_test_id].get_driver().page_source
     html_content = clean_html(content)
     return html_content
+
+
+def go_back(_run_test_id='1') -> str:
+    """
+    Usage = go_back({})
+    Goes back in the browser history.
+    """
+    global driver
+    driver[_run_test_id].back()
+    log_function_definition(go_back, _run_test_id=_run_test_id)
+    return "went back"
+
+def send_app_background(_run_test_id='1') -> str:
+    """
+    Usage = send_app_background({})
+    Sends the app to background.
+    """
+    global driver
+    driver[_run_test_id].background_app(-1)
+    log_function_definition(send_app_background, _run_test_id=_run_test_id)
+    return "app in background"
