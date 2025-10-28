@@ -155,7 +155,7 @@ def create_driver(_run_test_id='1'):
             driver[_run_test_id]
             .set_app_package_activity(app_package=app_package, app_activity=app_activity)
         )
-    if os.getenv("APPIUM_URL"):
+    if os.getenv("APPIUM_URL") != "":
         appium_url = os.getenv("APPIUM_URL")
         driver[_run_test_id] = (
             driver[_run_test_id]
@@ -176,7 +176,7 @@ def create_driver(_run_test_id='1'):
             .set_bundle_id(bundle_id=bundle_id)
         )
     driver[_run_test_id] = driver[_run_test_id].set_appium_driver()
-    streaming.start_stream(driver[_run_test_id], run_id="1", fps=5.0, jpeg_quality=70)
+    streaming.start_stream(driver[_run_test_id], run_id="1", fps=1.0, jpeg_quality=10)
     log_function_definition(create_driver, _run_test_id=_run_test_id)
     return "success"
 
