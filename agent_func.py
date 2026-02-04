@@ -1,5 +1,5 @@
 import re
-import streaming
+import ba_ws_sdk.streaming as streaming
 from testui.support.testui_driver import TestUIDriver
 from dotenv import load_dotenv
 
@@ -156,6 +156,16 @@ def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
     return "clicked successfully"
 
+def long_press(locator_type: str, locator: str, time: str, _run_test_id='1') -> str:
+    """
+    Usage = long_press({"locator_type": "...", "locator": "...", "time": "..."})
+    Long presses on the element defined by its `locator_type` (id, css, xpath)
+    and its locator path associated.
+    """
+    global driver
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).press_hold_for(float(time))
+    return "long pressed successfully"
+
 
 def get_page(_run_test_id='1') -> str:
     """
@@ -178,6 +188,16 @@ def go_back(_run_test_id='1') -> str:
     global driver
     driver[_run_test_id].back()
     return "went back"
+
+def wait_seconds(time_sec, _run_test_id='1') -> str:
+    """
+    Usage = wait_seconds({"time": "..."})
+    Waits for the specified number of seconds.
+    """
+    global driver
+    import time
+    time.sleep(float(time))
+    return "waited successfully"
 
 def get_attribute(locator_type: str, locator: str, attribute_name: str, _run_test_id='1') -> str:
     """

@@ -4,3 +4,4 @@ python-multipart
 python-testui
 python-dotenv
 aiohttp
+git+https://github.com/BarkoAgent/ba-sdk.git
