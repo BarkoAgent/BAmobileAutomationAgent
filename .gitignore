@@ -1,3 +1,5 @@
 logs
-tests
+tests/function_calls*.py
 __pycache__
+screen_memory
+.DS_Store
