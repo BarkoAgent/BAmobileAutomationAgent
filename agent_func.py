@@ -3,6 +3,7 @@ import re
 import json
 import hashlib
 import time as time_module
+import xml.etree.ElementTree as _ET
 from datetime import datetime, timezone
 
 import ba_ws_sdk.streaming as streaming
@@ -15,6 +16,11 @@ driver: dict[str, TestUIDriver] = {}
 run_test_id = ""
 last_returned_value = ""
 extra_capabilities: dict = {}
+# Per-run default wait timeout (seconds), set by the backend during AI/vision runs.
+test_timeout: dict[str, int] = {}
+# Cache of (logical_w, logical_h, shot_w, shot_h) per run so we don't take an
+# extra screenshot on every coordinate tap just to learn the device pixel ratio.
+_screen_scale: dict = {}
 
 MEMORY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screen_memory")
 
@@ -196,6 +202,10 @@ def stop_driver(_run_test_id='1'):
     drv = driver.pop(_run_test_id, None)
     if drv:
         drv.quit()
+    # Drop per-run vision state so a future run with the same id (or a device
+    # rotation) recomputes the screenshot→logical scale instead of reusing it.
+    _screen_scale.pop(_run_test_id, None)
+    test_timeout.pop(_run_test_id, None)
     last_returned_value = "success"
     return "success"
 
@@ -600,6 +610,31 @@ def swipe(direction: str, _run_test_id='1') -> str:
     return f"swiped {direction}"
 
 
+def swipe_coordinates(start_x: str, start_y: str, end_x: str, end_y: str,
+                      duration: str = '800', _run_test_id='1') -> str:
+    """
+    Usage = swipe_coordinates({"start_x": "...", "start_y": "...", "end_x": "...", "end_y": "...", "duration": "800"})
+    Performs a custom swipe gesture from (start_x, start_y) to (end_x, end_y).
+
+    Use this when the fixed directions in swipe() are not enough — e.g. dragging
+    a slider, swiping a specific card/list row, or a precise drag distance.
+
+    Coordinates are in SCREENSHOT-pixel space (what the vision model sees) and
+    are scaled to device logical points, so they land correctly on high-density
+    (Retina) screens. duration is the swipe time in MILLISECONDS (default 800);
+    a longer duration makes a slower, more deliberate drag.
+    """
+    d = _get_driver(_run_test_id).get_driver()
+    sx, sy = _scale_screenshot_to_logical(d, _run_test_id, float(start_x), float(start_y))
+    ex, ey = _scale_screenshot_to_logical(d, _run_test_id, float(end_x), float(end_y))
+    try:
+        dur = max(50, int(float(duration)))
+    except (TypeError, ValueError):
+        dur = 800
+    d.swipe(int(sx), int(sy), int(ex), int(ey), dur)
+    return f"swiped from ({int(sx)}, {int(sy)}) to ({int(ex)}, {int(ey)}) over {dur}ms"
+
+
 def scroll_to_element(locator_type: str, locator: str, direction: str = "down", max_scrolls: int = 5, _run_test_id='1') -> str:
     """
     Usage = scroll_to_element({"locator_type": "...", "locator": "...", "direction": "down", "max_scrolls": 5})
@@ -627,10 +662,378 @@ def tap_coordinates(x: str, y: str, _run_test_id='1') -> str:
     Taps on the screen at the given x, y pixel coordinates. Use this only when no reliable
     locator is available for the target element.
     """
-    from appium.webdriver.common.touch_action import TouchAction
     d = _get_driver(_run_test_id).get_driver()
-    TouchAction(d).tap(x=int(x), y=int(y)).perform()
+    _native_tap(d, int(x), int(y))
     return f"tapped at ({x}, {y})"
+
+
+###############################################################################
+# Vision support — coordinate tapping driven by screenshots.
+#
+# A native mobile app has NO DOM/JS, so the backend's DOM element-map / click
+# probe / ai_action (all JavaScript) cannot run here. The backend gracefully
+# degrades to the native coordinate click, so the agent must expose:
+#   - click_coordinates  (alias of tap, but SCALED screenshot-px -> logical pts)
+#   - scroll_by          (mapped to a swipe gesture)
+#   - set_default_timeout
+# The crucial difference from tap_coordinates: the vision model picks
+# coordinates in the SCREENSHOT's pixel space (e.g. 1170px wide on a Retina
+# phone), but Appium taps in logical points (e.g. 390px). We scale between them
+# so taps land where the model intended.
+###############################################################################
+
+def set_default_timeout(timeout: str, _run_test_id='1') -> str:
+    """Stores the default wait timeout (in SECONDS) for this run (used by AI/vision runs)."""
+    global test_timeout
+    try:
+        secs = max(1, min(60, int(float(timeout))))
+    except (TypeError, ValueError):
+        return "invalid timeout"
+    test_timeout[_run_test_id] = secs
+    return f"default timeout set to {secs}s"
+
+
+def _get_scale_dims(d, _run_test_id):
+    """
+    Return (logical_w, logical_h, screenshot_w, screenshot_h) for this run,
+    cached. logical = Appium tap/bounds space; screenshot = what the vision
+    model sees. They differ by the device pixel ratio on Retina/HiDPI screens.
+    """
+    global _screen_scale
+    cached = _screen_scale.get(_run_test_id)
+    if cached is None:
+        lw = lh = sw = sh = 0
+        try:
+            size = d.get_window_size()
+            lw, lh = int(size['width']), int(size['height'])
+        except Exception as e:
+            print(f"[vision] window size unavailable: {e}")
+        try:
+            from PIL import Image
+            from io import BytesIO
+            img = Image.open(BytesIO(d.get_screenshot_as_png()))
+            sw, sh = img.size
+        except Exception as e:
+            print(f"[vision] screenshot sizing failed: {e}")
+        # Fall back to whichever dimension we have so ratios are 1.0 (no scaling)
+        # rather than zero-division.
+        cached = (lw or sw or 1, lh or sh or 1, sw or lw or 1, sh or lh or 1)
+        _screen_scale[_run_test_id] = cached
+    return cached
+
+
+def _scale_screenshot_to_logical(d, _run_test_id, px, py):
+    """Convert screenshot-pixel coords (model space) to device logical points (tap space)."""
+    lw, lh, sw, sh = _get_scale_dims(d, _run_test_id)
+    if sw and sh and (sw != lw or sh != lh):
+        return px * lw / sw, py * lh / sh
+    return px, py
+
+
+def _native_tap(d, x, y):
+    """
+    Tap at LOGICAL coordinates using the modern Appium gesture plugins, which
+    are reliable on Appium 2 (UiAutomator2 / XCUITest). The legacy TouchAction
+    bridge often silently no-ops on launcher icons / app tiles (and can raise the
+    raw-body errors seen in agent logs), so it's only the last-resort fallback.
+    """
+    ix, iy = int(x), int(y)
+    plat = ''
+    try:
+        plat = str((d.capabilities or {}).get('platformName') or '').lower()
+    except Exception:
+        pass
+    try:
+        if 'ios' in plat:
+            d.execute_script('mobile: tap', {'x': ix, 'y': iy})
+        else:
+            d.execute_script('mobile: clickGesture', {'x': ix, 'y': iy})
+        return
+    except Exception as e:
+        print(f"[vision] mobile gesture tap failed ({e}); falling back to TouchAction")
+    from appium.webdriver.common.touch_action import TouchAction
+    TouchAction(d).tap(x=ix, y=iy).perform()
+
+
+def _parse_node_bounds(attrib):
+    """
+    Return (x1, y1, x2, y2) in LOGICAL points for an Appium XML node, or None.
+    Android exposes bounds="[x1,y1][x2,y2]"; iOS exposes x/y/width/height.
+    """
+    b = attrib.get('bounds')
+    if b:
+        nums = re.findall(r'-?\d+', b)
+        if len(nums) == 4:
+            x1, y1, x2, y2 = (int(n) for n in nums)
+            return (x1, y1, x2, y2)
+    if 'x' in attrib and 'width' in attrib:
+        try:
+            x = int(float(attrib['x']))
+            y = int(float(attrib['y']))
+            w = int(float(attrib['width']))
+            h = int(float(attrib['height']))
+            return (x, y, x + w, y + h)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _node_identity(attrib):
+    """
+    Best stable identity for an Appium node → (strategy, locator, text).
+    strategy is one of: 'id' (resource-id), 'accessibility' (content-desc/name),
+    'xpath' (by visible text), or None when nothing stable is available.
+    """
+    text = (attrib.get('text') or attrib.get('label') or attrib.get('value') or '').strip()
+    rid = (attrib.get('resource-id') or '').strip()
+    cdesc = (attrib.get('content-desc') or '').strip()
+    name = (attrib.get('name') or '').strip()
+    if rid:
+        return 'id', rid, (text or name)
+    if cdesc:
+        return 'accessibility', cdesc, (text or name)
+    if name:
+        return 'accessibility', name, (text or name)
+    if text:
+        esc = text.replace('"', '')
+        return 'xpath', f'//*[@text="{esc}" or @label="{esc}"]', text
+    return None, None, ''
+
+
+def inspect_point(x: str, y: str, _run_test_id='1') -> str:
+    """
+    Resolve the element behind a tap (the Appium-XML analog of the web's
+    elementFromPoint probe). Coordinates are in SCREENSHOT-pixel space; we scale
+    to logical points, find the smallest element whose bounds contain the point,
+    walk to the nearest node carrying a stable identity, and return that identity
+    plus the element's center (reported back in screenshot space).
+
+    Returns JSON: {status: HIT|MISS, strategy, locator, text, cls, center:[x,y], aim:[x,y]}.
+    """
+    d = _get_driver(_run_test_id).get_driver()
+    lw, lh, sw, sh = _get_scale_dims(d, _run_test_id)
+    ax, ay = int(float(x)), int(float(y))
+    lx = float(x) * (lw / sw if sw else 1.0)
+    ly = float(y) * (lh / sh if sh else 1.0)
+    try:
+        root = _ET.fromstring(d.page_source)
+    except Exception as e:
+        return json.dumps({"status": "MISS", "aim": [ax, ay], "reason": f"page_source parse failed: {e}"})
+
+    containing = []
+    for node in root.iter():
+        bb = _parse_node_bounds(node.attrib)
+        if not bb:
+            continue
+        x1, y1, x2, y2 = bb
+        if x2 <= x1 or y2 <= y1:
+            continue
+        if x1 <= lx <= x2 and y1 <= ly <= y2:
+            containing.append(((x2 - x1) * (y2 - y1), bb, node.attrib))
+    if not containing:
+        return json.dumps({"status": "MISS", "aim": [ax, ay]})
+
+    containing.sort(key=lambda t: t[0])  # smallest (most specific) first
+    chosen = None
+    for _area, bb, attrib in containing:
+        strat, loc, text = _node_identity(attrib)
+        if strat:
+            chosen = (bb, attrib, strat, loc, text)
+            break
+    if chosen is None:
+        bb, attrib = containing[0][1], containing[0][2]
+        strat, loc = None, None
+        text = (attrib.get('text') or attrib.get('label') or '').strip()
+    else:
+        bb, attrib, strat, loc, text = chosen
+
+    x1, y1, x2, y2 = bb
+    scx = int((x1 + x2) / 2 * (sw / lw if lw else 1.0))
+    scy = int((y1 + y2) / 2 * (sh / lh if lh else 1.0))
+    return json.dumps({
+        "status": "HIT",
+        "strategy": strat or "coordinate",
+        "locator": loc or "",
+        "text": (text or "")[:80],
+        "cls": (attrib.get('class') or attrib.get('type') or '')[:60],
+        "center": [scx, scy],
+        "aim": [ax, ay],
+    })
+
+
+def get_element_map(_run_test_id='1') -> str:
+    """
+    Enumerate visible, identifiable/clickable elements on the current screen with
+    their centers (in SCREENSHOT space) and stable identity — the Appium-XML
+    analog of the web element map used by inspect_streaming.
+
+    Returns JSON: {count, elements:[{text, strategy, locator, cls, center:[x,y]}]}.
+    """
+    d = _get_driver(_run_test_id).get_driver()
+    lw, lh, sw, sh = _get_scale_dims(d, _run_test_id)
+    try:
+        root = _ET.fromstring(d.page_source)
+    except Exception as e:
+        return json.dumps({"count": 0, "elements": [], "error": str(e)})
+    elements = []
+    for node in root.iter():
+        bb = _parse_node_bounds(node.attrib)
+        if not bb:
+            continue
+        x1, y1, x2, y2 = bb
+        if x2 <= x1 or y2 <= y1:
+            continue
+        attrib = node.attrib
+        strat, loc, text = _node_identity(attrib)
+        clickable = (attrib.get('clickable') == 'true') or (attrib.get('accessible') == 'true')
+        if not (strat or clickable or text):
+            continue
+        # Convert bounds (logical) → screenshot space so the backend can draw
+        # the numbered element map directly over the screenshot it streams.
+        rx = (sw / lw) if lw else 1.0
+        ry = (sh / lh) if lh else 1.0
+        sx1, sy1, sx2, sy2 = int(x1 * rx), int(y1 * ry), int(x2 * rx), int(y2 * ry)
+        elements.append({
+            "text": (text or "")[:60],
+            "strategy": strat or "",
+            "locator": loc or "",
+            "tag": (attrib.get('class') or attrib.get('type') or '')[:40],
+            "box": [sx1, sy1, sx2, sy2],
+            "center": [int((sx1 + sx2) / 2), int((sy1 + sy2) / 2)],
+        })
+    return json.dumps({"count": len(elements), "elements": elements})
+
+
+def tap_element_by_identity(strategy: str = '', locator: str = '', text: str = '',
+                            cx: str = '0', cy: str = '0', action: str = 'click',
+                            value: str = '', _run_test_id='1') -> str:
+    """
+    Replay an ai_action recorded by the vision loop: re-find the element by its
+    stable identity (resource-id / accessibility id / text xpath) and tap it;
+    fall back to a scaled coordinate tap at (cx, cy) when identity re-find fails.
+    Returns JSON: {status: DONE|NOMATCH, via}.
+    """
+    drv = _get_driver(_run_test_id)
+    d = drv.get_driver()
+    last_err = ""
+    if strategy and locator and strategy != 'coordinate':
+        try:
+            el = drv.e(locator_type=strategy, locator=locator)
+            el.wait_until_exists(seconds=int(test_timeout.get(_run_test_id, 5)))
+            if action == 'type':
+                el.clear().send_keys(value=value)
+            else:
+                el.click()
+            return json.dumps({"status": "DONE", "via": strategy})
+        except Exception as e:
+            last_err = str(e)
+    # Coordinate fallback (cx/cy are screenshot-space → scale to logical).
+    try:
+        lx, ly = _scale_screenshot_to_logical(d, _run_test_id, float(cx), float(cy))
+        _native_tap(d, int(lx), int(ly))
+        return json.dumps({"status": "DONE", "via": "coordinate"})
+    except Exception as e:
+        return json.dumps({"status": "NOMATCH", "reason": (last_err or str(e))})
+
+
+# Focused element across platforms: Android exposes @focused, iOS @hasKeyboardFocus.
+_FOCUSED_XPATH = '//*[@focused="true" or @hasKeyboardFocus="true"]'
+
+
+def type_keys(value: str, _run_test_id='1', clear: str = 'false', use_vars: str = 'false') -> str:
+    """
+    Types text into the currently focused field (no locator) — used after a
+    coordinate tap focuses an input. Set clear='true' to clear it first.
+    Name-compatible with the web agents so the vision pipeline can drive mobile.
+    """
+    drv = _get_driver(_run_test_id)
+    try:
+        # A short wait — this checks what is focused RIGHT NOW (after a click);
+        # waiting longer won't make an unfocused field appear, it just stalls.
+        el = drv.e(locator_type='xpath', locator=_FOCUSED_XPATH)
+        el.wait_until_exists(seconds=2)
+        if clear == 'true':
+            try:
+                el.clear()
+            except Exception:
+                pass
+        el.send_keys(value=value)
+        return "typed"
+    except Exception as e:
+        return f"could not type into focused element: {e}"
+
+
+def press_key(key: str, _run_test_id='1') -> str:
+    """
+    Presses a single key. On Android uses key-event codes (Enter, Back, Tab, …);
+    otherwise sends the key to the focused field. Vision-pipeline compatible.
+    """
+    d = _get_driver(_run_test_id).get_driver()
+    k = str(key).strip().lower()
+    android_codes = {
+        'enter': 66, 'back': 4, 'home': 3, 'tab': 61, 'delete': 67,
+        'backspace': 67, 'space': 62, 'search': 84, 'escape': 111,
+    }
+    if k in android_codes and hasattr(d, 'press_keycode'):
+        try:
+            d.press_keycode(android_codes[k])
+            return f"pressed {key}"
+        except Exception:
+            pass
+    try:
+        from selenium.webdriver.common.keys import Keys
+        keymap = {
+            'enter': Keys.ENTER, 'tab': Keys.TAB, 'backspace': Keys.BACK_SPACE,
+            'delete': Keys.DELETE, 'escape': Keys.ESCAPE,
+        }
+        drv = _get_driver(_run_test_id)
+        el = drv.e(locator_type='xpath', locator=_FOCUSED_XPATH)
+        el.send_keys(value=keymap.get(k, key))
+        return f"pressed {key}"
+    except Exception as e:
+        return f"could not press {key}: {e}"
+
+
+def click_coordinates(x: str, y: str, _run_test_id='1') -> str:
+    """
+    Taps at the given SCREENSHOT-pixel coordinates. Coordinates are scaled to
+    the device's logical points (handles Retina/high-density screens), so taps
+    land where the vision model intended. Name-compatible with the web agents'
+    click_coordinates so the same backend vision pipeline can drive mobile.
+    Use only when no reliable locator is available.
+    """
+    d = _get_driver(_run_test_id).get_driver()
+    lx, ly = _scale_screenshot_to_logical(d, _run_test_id, float(x), float(y))
+    _native_tap(d, int(lx), int(ly))
+    return f"tapped at ({int(lx)}, {int(ly)})"
+
+
+def scroll_by(dx: str, dy: str, _run_test_id='1') -> str:
+    """
+    Scrolls the screen by approximately the given amounts (vision-pipeline
+    compatible). Positive dy scrolls content DOWN, negative UP; dx scrolls
+    horizontally. Mapped to a swipe gesture (mobile has no pixel-precise scroll).
+    """
+    d = _get_driver(_run_test_id).get_driver()
+    size = d.get_window_size()
+    w, h = int(size['width']), int(size['height'])
+    cx, cy = w // 2, h // 2
+    try:
+        fdx, fdy = float(dx), float(dy)
+    except (TypeError, ValueError):
+        fdx, fdy = 0.0, 0.0
+    if abs(fdy) >= abs(fdx):
+        # Content scrolls DOWN when the finger swipes UP (and vice versa).
+        if fdy >= 0:
+            d.swipe(cx, int(h * 0.7), cx, int(h * 0.3), 600)
+        else:
+            d.swipe(cx, int(h * 0.3), cx, int(h * 0.7), 600)
+    else:
+        if fdx >= 0:
+            d.swipe(int(w * 0.7), cy, int(w * 0.3), cy, 600)
+        else:
+            d.swipe(int(w * 0.3), cy, int(w * 0.7), cy, 600)
+    return f"scrolled by ({dx}, {dy})"
 
 
 ###############################################################################
